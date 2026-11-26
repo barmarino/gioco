@@ -166,6 +166,14 @@ grant execute on function public.enter_game(text)       to anon, authenticated;
 grant execute on function public.save_game(text, jsonb) to anon, authenticated;
 grant execute on function public.is_researcher()        to authenticated;
 
+-- Supabase's "Enable RLS on new tables" option adds a helper function that
+-- anyone could call through the API (it does nothing useful, but no need).
+do $$ begin
+  if to_regprocedure('public.rls_auto_enable()') is not null then
+    revoke execute on function public.rls_auto_enable() from public, anon, authenticated;
+  end if;
+end $$;
+
 -- ---------- Test data ----------
 -- Two fake schools and six fake codes. Before the field, delete them
 -- (delete from public.families; delete from public.schools;) and load the real codes.
