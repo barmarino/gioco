@@ -68,6 +68,10 @@ p { margin: 0; }
 .start-sheet { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 18px 20px; display: grid; gap: 12px; }
 .start-sheet .row { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px dashed var(--line); padding-bottom: 8px; }
 .start-sheet .row:last-child { border-bottom: 0; padding-bottom: 0; }
+.start-sheet .row .num { white-space: nowrap; }
+/* end-of-game table on phones: the outcome goes under the decision, so the amount column stays on screen */
+.settle .mob { display: none; }
+@media (max-width: 560px) { .settle .oc { display: none; } .settle .mob { display: block; } .settle .pending { white-space: normal; } .settle th, .settle td { padding: 8px; } }
 .seed { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
 .seed label { display: grid; gap: 4px; font-size: 0.85rem; color: var(--muted); font-weight: 700; }
 .seed input { font: 500 1rem var(--f-mono); width: 9rem; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
@@ -930,12 +934,12 @@ const nLeft = RISK_IDS.filter(id => !revealed(id)).length;
 const lastOnes = nLeft === 1 ? 'l’ultima decisione' : nLeft === 2 ? 'le ultime due decisioni' : `le ultime ${nLeft} decisioni`;
 const rows = RISK_IDS.map(id => {
 const shown = revealed(id), v = dieAmount(id);
-return `<tr><td>${FRAME[id].title}<span class="mini">Settimana ${WEEK_OF[id]} · ${RLAB[KIND[id]][G.choices[id]]}</span></td>
+return `<tr><td>${FRAME[id].title}<span class="mini">Settimana ${WEEK_OF[id]} · ${RLAB[KIND[id]][G.choices[id]]}</span>${shown ? `<span class="mini mob">${cap(riskOutcomeText(id))}</span>` : ''}</td>
 <td class="die-cell">${shown ? dieHTML(G.dice[id]) : '<span class="pending">da tirare</span>'}</td>
-<td>${shown ? riskOutcomeText(id) : '—'}</td><td class="r ${shown ? (v > 0 ? 'pos' : v < 0 ? 'neg' : '') : ''}">${shown ? sgn(v) : '—'}</td></tr>`;
+<td class="oc">${shown ? riskOutcomeText(id) : '—'}</td><td class="r ${shown ? (v > 0 ? 'pos' : v < 0 ? 'neg' : '') : ''}">${shown ? sgn(v) : '—'}</td></tr>`;
 }).join('');
 const tot = allRolled ? RISK_IDS.reduce((a, id) => a + dieAmount(id), 0) : 0;
-const foot = allRolled ? `<tfoot><tr><td colspan="3">Totale dei dadi, già sul conto</td><td class="r ${tot > 0 ? 'pos' : tot < 0 ? 'neg' : ''}">${sgn(tot)}</td></tr></tfoot>` : '';
+const foot = allRolled ? `<tfoot><tr><td colspan="2">Totale dei dadi, già sul conto</td><td class="oc"></td><td class="r ${tot > 0 ? 'pos' : tot < 0 ? 'neg' : ''}">${sgn(tot)}</td></tr></tfoot>` : '';
 const lead = allRolled ? 'Le quattro settimane sono finite. Ecco com’è andata con le 12 decisioni con il dado e il vostro patrimonio finale.' : `Le quattro settimane sono finite. Tirate i dadi per ${lastOnes}, poi si chiudono i conti.`;
 const step = allRolled ? '' : `<div class="diebox bigdie">${dieHTML(6)}<p>Tirate i dadi per ${lastOnes}.</p><button class="btn" data-act="roll">Tirate i dadi</button></div>`;
 let result = '';
@@ -959,7 +963,7 @@ return `${topHTML(null, 'Fine della stagione')}
 <section class="end">
 <div class="stack" style="gap:8px"><p class="kicker">Settimana 4 completata</p><h2>Si chiudono i conti della stagione</h2><p class="text">${lead}</p></div>
 ${step}
-<div class="tablewrap settle"><table><thead><tr><th>Decisione</th><th>Dado</th><th>Com’è andata</th><th class="r">Sul conto</th></tr></thead><tbody>${rows}</tbody>${foot}</table></div>
+<div class="tablewrap settle"><table><thead><tr><th>Decisione</th><th>Dado</th><th class="oc">Com’è andata</th><th class="r">Sul conto</th></tr></thead><tbody>${rows}</tbody>${foot}</table></div>
 ${result}
 </section>`;
 }
