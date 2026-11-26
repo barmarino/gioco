@@ -1,17 +1,26 @@
 # Bar Marino
 
-Gioco per le famiglie del progetto di educazione finanziaria nelle scuole (versione 4c).
+Family game of the school financial-education project (version 4c). The game itself is in Italian; everything on the research side (database, data, panel) is in English.
 
-- **Pagina del gioco:** https://barmarino.github.io/gioco/ — link personale per una famiglia: `https://barmarino.github.io/gioco/?f=CODICE`
-- **Pannello ricercatori:** https://barmarino.github.io/gioco/#pannello (email e password dell'utente Supabase; l'email deve essere nella tabella `ricercatori`)
+- **Game:** https://barmarino.github.io/gioco/ — personal link for a family: `https://barmarino.github.io/gioco/?f=CODE`
+- **Researcher panel:** https://barmarino.github.io/gioco/#panel (email and password of a Supabase user whose email is in the `researchers` table)
 
-## Come è fatto
+## How it works
 
-- `index.html` è tutto il gioco in un solo file: caratteri e libreria di Supabase sono inclusi, quindi il telefono parla solo con GitHub Pages e con Supabase.
-- I dati stanno su Supabase (progetto in UE, Francoforte). La struttura del database, le regole d'accesso e le due funzioni usate dalle famiglie (`entra`, `salva`) sono in `supabase/setup.sql`.
-- Nel database non ci sono nomi né il braccio di trattamento: solo codici. La tabella codice ↔ nome resta al team.
-- In `index.html` c'è la chiave *publishable* di Supabase: è fatta per stare in una pagina pubblica. La chiave segreta e la password del database non vanno mai messe qui.
+- `index.html` is the whole game in one file. Fonts and the Supabase client are inside it, so phones only talk to GitHub Pages and Supabase.
+- Data are on Supabase (EU project, Frankfurt). The database structure, access rules and the two functions families use (`enter_game`, `save_game`) are in `supabase/setup.sql`.
+- The database holds no names and no treatment arm, only codes. The code ↔ name key stays with the team.
+- `index.html` contains Supabase's *publishable* key, which is meant to be public. The secret key and the database password never go here.
 
-## Aggiornare il gioco
+## Data
 
-Sostituire `index.html` con la nuova versione: GitHub Pages la pubblica in un paio di minuti. Ogni versione resta nella cronologia del repository, così si sa quale versione era online in ogni momento.
+The panel exports two CSV files, computed from the stored games (scores and dice are recomputed from the choices and each family's dice code):
+
+- **one row per decision:** `family_code, school, seed, mirrored_dice, n, week, decision, type, option, option_label, seconds, selections, chosen_at, die, outcome, amount, shock_seen, prev_week_outcomes`
+- **one row per family:** progress, activity, `financial_part`, `dice_total`, `final_net_worth`, `expected_net_worth`, and one column per decision (`d01_grinder` … `d20_mixed_w4`) with the option number.
+
+Decision names and option codes are in the spreadsheet "Bar Marino: decisions and what they measure" (column *Dataset variable* and *Dataset values*). Times are UTC.
+
+## Updating the game
+
+Replace `index.html` with the new version: GitHub Pages publishes it within a couple of minutes. Every version stays in the commit history, so it is always known which version was online at any time.

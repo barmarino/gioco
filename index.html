@@ -413,7 +413,7 @@ const cap = t => t.charAt(0).toUpperCase() + t.slice(1);
 const listIt = (a, sep = '; ') => a.length < 2 ? a.join('') : a.slice(0, -1).join(sep) + ' e ' + a[a.length - 1];
 const RLAB = {
 G: { A: 'Solo compenso fisso', B: 'Fisso alto e una piccola percentuale', C: 'Metà fisso, metà percentuale', D: 'Fisso basso e una percentuale alta', E: 'Solo percentuale' },
-L: { A: 'Copertura totale', B: 'Franchigia €300', C: 'Franchigia €600', D: 'Franchigia €900', E: 'Nessuna assicurazione' },
+L: { A: 'Copertura totale', B: 'Franchigia €30', C: 'Franchigia €60', D: 'Franchigia €90', E: 'Nessuna assicurazione' },
 M: { A: 'Nessun ordine extra', B: 'Ordine piccolo', C: 'Ordine medio', D: 'Ordine grande', E: 'Ordine molto grande' }
 };
 const RSUB = { L: { A: 'Premio €75. Se si rompe, paga tutto l’assicurazione.', B: 'Premio €55. Se si rompe, pagate voi i primi €30.', C: 'Premio €35. Se si rompe, pagate voi i primi €60.', D: 'Premio €15. Se si rompe, pagate voi i primi €90.', E: 'Nessun premio. Se si rompe, pagate voi tutti i €120.' } };
@@ -551,9 +551,9 @@ const CONFIG = {
   SUPABASE_URL: 'https://bfuedtmwlpvbkizzpzpl.supabase.co',
   SUPABASE_KEY: 'sb_publishable_G3uUx-Q-EKsajqJUOvI5PQ_iSiNfdHP'
 };
-// Everything that talks to the server is in Store. The tables and the two functions entra/salva are created by setup.sql.
-// Families never read tables: they call entra(code) and salva(code, game). Researchers sign in and read through the database rules.
-const VERSION = '4c-famiglie-supabase-1.0';
+// Everything that talks to the server is in Store. The tables and the two functions enter_game/save_game are created by setup.sql.
+// Families never read tables: they call enter_game(code) and save_game(code, game). Researchers sign in and read through the database rules.
+const VERSION = '4c-family-supabase-1.1';
 const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej({ code: 'timeout', message: 'timeout' }), ms))]);
 const configured = () => /^https:\/\/.+/.test(CONFIG.SUPABASE_URL) && !/INCOLLA/.test(CONFIG.SUPABASE_URL + CONFIG.SUPABASE_KEY);
 const must = ({ data, error }) => { if (error) throw error; return data; };
@@ -568,8 +568,8 @@ const Store = {
   },
   setSession(session) { this.isAdmin = !!session; this.email = session && session.user ? session.user.email || '' : ''; },
   // families
-  async enter(code) { return must(await this.db.rpc('entra', { p_codice: code })); },
-  async saveGame(code, doc) { return must(await this.db.rpc('salva', { p_codice: code, p_doc: doc })); },
+  async enter(code) { return must(await this.db.rpc('enter_game', { p_code: code })); },
+  async saveGame(code, doc) { return must(await this.db.rpc('save_game', { p_code: code, p_game: doc })); },
   // researchers (what they can read is decided by the database rules, not by this page)
   async signIn(email, password) { const data = must(await this.db.auth.signInWithPassword({ email, password })); this.setSession(data.session); },
   async signOut() { try { await this.db.auth.signOut(); } catch (_) {} this.setSession(null); },
@@ -582,14 +582,14 @@ const Store = {
     }
   },
   async allFamilies() {
-    const rows = await this.fetchAll('famiglie', 'codice, scuola, seed, speculari, nota, attiva, azzerata', 'codice');
-    return rows.map(r => ({ code: r.codice, scuola: r.scuola, seed: r.seed, speculari: r.speculari, nota: r.nota, attiva: r.attiva, azzerata: r.azzerata }));
+    const rows = await this.fetchAll('families', 'code, school, seed, mirrored_dice, note, active, reset_at', 'code');
+    return rows.map(r => ({ code: r.code, school: r.school, seed: r.seed, mirrored: r.mirrored_dice, note: r.note, active: r.active, reset_at: r.reset_at }));
   },
-  async allSchools() { return Object.fromEntries((await this.fetchAll('scuole', 'id, nome, apertura', 'id')).map(r => [r.id, { nome: r.nome, apertura: r.apertura }])); },
-  async allGames() { return Object.fromEntries((await this.fetchAll('partite', 'codice, doc', 'codice')).map(r => [r.codice, r.doc])); },
+  async allSchools() { return Object.fromEntries((await this.fetchAll('schools', 'id, name, opening_dates', 'id')).map(r => [r.id, { name: r.name, opening_dates: r.opening_dates }])); },
+  async allGames() { return Object.fromEntries((await this.fetchAll('games', 'code, game', 'code')).map(r => [r.code, r.game])); },
   async resetGame(code) {
-    must(await this.db.from('partite').delete().eq('codice', code));
-    must(await this.db.from('famiglie').update({ azzerata: new Date().toISOString() }).eq('codice', code));
+    must(await this.db.from('games').delete().eq('code', code));
+    must(await this.db.from('families').update({ reset_at: new Date().toISOString() }).eq('code', code));
   }
 };
 
@@ -612,29 +612,29 @@ function newGame(seed, mirror, code, choices = {}, i = 0, shown = [], log = [], 
 // A saved game (from the server or from this device), checked against the rules of the game. Anything malformed is dropped.
 function cleanSaved(d) {
   if (!d || typeof d !== 'object') return null;
-  const choices = {}, sc = d.scelte || {};
+  const choices = {}, sc = d.choices || {};
   let i = 0;
   for (; i < 20; i++) { const id = idxOf(i); if (!optsOf(id).includes(sc[id])) break; choices[id] = sc[id]; }
-  const shown = Array.isArray(d.dadi_tirati) ? [...new Set(d.dadi_tirati.filter(id => RISK_IDS.includes(id) && choices[id] != null))] : [];
-  return { choices, i, shown, log: Array.isArray(d.eventi) ? d.eventi.slice(-500) : [], started: d.iniziata || null, at: d.aggiornata || '' };
+  const shown = Array.isArray(d.dice_rolled) ? [...new Set(d.dice_rolled.filter(id => RISK_IDS.includes(id) && choices[id] != null))] : [];
+  return { choices, i, shown, log: Array.isArray(d.events) ? d.events.slice(-500) : [], started: d.started_at || null, at: d.updated_at || '' };
 }
 const progress = p => p ? p.i * 20 + p.shown.length : -1;
 function gameDoc() {
   return {
-    codice: G.code, scuola: FAM ? FAM.scuola || null : null, seed: G.seed, speculari: G.mirror, versione: VERSION,
-    decisioni: G.i, scelte: G.choices, dadi_tirati: G.shown, eventi: G.log,
-    iniziata: G.started, aggiornata: nowISO(),
-    completata: G.i === 20 && G.shown.length === 12
+    code: G.code, school: FAM ? FAM.school || null : null, seed: G.seed, mirrored_dice: G.mirror, version: VERSION,
+    decisions: G.i, choices: G.choices, dice_rolled: G.shown, events: G.log,
+    started_at: G.started, updated_at: nowISO(),
+    completed: G.i === 20 && G.shown.length === 12
   };
 }
 // Event times use the server's clock: the phone's clock can be wrong, so the offset measured at entry is added
 let CLOCK_OFFSET = 0;
 const nowISO = () => new Date(Date.now() + CLOCK_OFFSET).toISOString();
-function logEv(ev, extra = {}) { G.log.push({ t: nowISO(), ev, ...extra }); }
+function logEv(event, extra = {}) { G.log.push({ time: nowISO(), event, ...extra }); }
 function logDice(ids) {
-  for (const id of ids) logEv('dado', { id, settimana: WEEK_OF[id], faccia: G.dice[id], esito: good(G.dice[id]) ? 'favorevole' : 'sfavorevole', importo: dieAmount(id) });
+  for (const id of ids) logEv('die', { decision: VAR[id], week: WEEK_OF[id], face: G.dice[id], outcome: outcomeOf(G.dice[id]), amount: dieAmount(id) });
 }
-const deviceInfo = () => ({ touch: matchMedia('(pointer: coarse)').matches, larghezza: window.innerWidth });
+const deviceInfo = () => ({ touch: matchMedia('(pointer: coarse)').matches, screen_width: window.innerWidth });
 
 // ---- this device: a backup of each family's game, and the last code used ----
 const LKEY = c => 'bar-marino-server-' + c;
@@ -653,7 +653,7 @@ async function sync() {
   try {
     const res = await withTimeout(Store.saveGame(code, doc), 20000);
     Sync.tries = 0; clearTimeout(Sync.timer);
-    if (res && res.ok === false && res.motivo === 'indietro' && code === G.code) { Sync.busy = false; adoptServer(res.partita); return; }
+    if (res && res.ok === false && res.reason === 'behind' && code === G.code) { Sync.busy = false; adoptServer(res.game); return; }
     setSync(Sync.dirty ? 'saving' : 'ok');
   } catch (e) {
     Sync.dirty = true;
@@ -685,7 +685,7 @@ function todayStr() {
   if (SERVER_TODAY) return SERVER_TODAY;
   const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
-const opensOn = w => (SCHOOL && Array.isArray(SCHOOL.apertura) ? SCHOOL.apertura[w - 1] : null) || null;
+const opensOn = w => (SCHOOL && Array.isArray(SCHOOL.opening_dates) ? SCHOOL.opening_dates[w - 1] : null) || null;
 const isOpen = w => !G.code || !opensOn(w) || opensOn(w) <= todayStr();
 const dateIt = d => d ? new Date(d + 'T12:00:00').toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long' }) : '';
 // The screen a family lands on when it enters with its code
@@ -705,18 +705,18 @@ async function login(raw) {
   G.busy = true; render();
   try {
     const got = await withTimeout(Store.enter(code), 12000);
-    if (!got || !got.famiglia) { G.busy = false; G.err = 'Non troviamo questo codice. Controllate di averlo scritto come sul foglio.'; render(); return; }
-    const fam = got.famiglia, school = got.scuola || null;
-    if (/^\d{4}-\d\d-\d\d$/.test(got.oggi || '')) SERVER_TODAY = got.oggi;
-    const srv = Date.parse(got.ora || ''); CLOCK_OFFSET = isNaN(srv) ? 0 : srv - Date.now();
-    const r = cleanSaved(got.partita);
+    if (!got || !got.family) { G.busy = false; G.err = 'Non troviamo questo codice. Controllate di averlo scritto come sul foglio.'; render(); return; }
+    const fam = got.family, school = got.school || null;
+    if (/^\d{4}-\d\d-\d\d$/.test(got.today || '')) SERVER_TODAY = got.today;
+    const srv = Date.parse(got.now || ''); CLOCK_OFFSET = isNaN(srv) ? 0 : srv - Date.now();
+    const r = cleanSaved(got.game);
     let l = cleanSaved(loadLocal(code));
-    if (l && fam.azzerata && !(new Date(l.at) > new Date(fam.azzerata))) l = null; // the team reset this game after the copy on this device was made
+    if (l && fam.reset_at && !(new Date(l.at) > new Date(fam.reset_at))) l = null; // the team reset this game after the copy on this device was made
     const p = progress(l) > progress(r) ? l : r;
     FAM = { code, ...fam }; SCHOOL = school;
-    newGame(Number(fam.seed) > 0 ? Number(fam.seed) : 1, !!fam.speculari, code, p ? p.choices : {}, p ? p.i : 0, p ? p.shown : [], p ? [...p.log] : [], p ? p.started : null);
+    newGame(Number(fam.seed) > 0 ? Number(fam.seed) : 1, !!fam.mirrored_dice, code, p ? p.choices : {}, p ? p.i : 0, p ? p.shown : [], p ? [...p.log] : [], p ? p.started : null);
     G.screen = entryScreen();
-    logEv('accesso', { decisioni: G.i, schermata: G.screen, ...deviceInfo(), scarto_orologio_s: Math.round(CLOCK_OFFSET / 1000) });
+    logEv('login', { decisions: G.i, screen: G.screen, ...deviceInfo(), clock_offset_s: Math.round(CLOCK_OFFSET / 1000) });
     Sync.state = ''; sync();
     render(); top0();
   } catch (e) {
@@ -771,9 +771,9 @@ function renderLogin() {
   let status = '';
   if (!Store.ready) status = '<p class="muted" role="status">Collegamento al server…</p>';
   else if (!Store.db) status = `<div class="start-sheet"><p>${configured() ? 'Il collegamento al server non è disponibile: ricaricate la pagina tra poco.' : 'Il gioco non è ancora collegato a un server: mancano indirizzo e chiave in CONFIG.'}</p><div class="actions"><button class="btn ghost" data-act="offline">Gioca senza server</button></div></div>`;
-  const tests = TEST.filter(f => /^PROVA/.test(f.scuola || '')).slice(0, 12);
-  const codes = Store.isAdmin && tests.length ? `<div class="stack" style="gap:8px"><p class="kicker">Codici di prova · li vede solo il team</p>
-      <div class="codes">${tests.map(f => `<button class="chip" type="button" data-act="fill-code" data-code="${esc(f.code)}">${esc(f.code)}${f.nota ? `<span class="mini">${esc(f.nota)}</span>` : ''}</button>`).join('')}</div></div>` : '';
+  const tests = TEST.filter(f => /^TEST/.test(f.school || '')).slice(0, 12);
+  const codes = Store.isAdmin && tests.length ? `<div class="stack" style="gap:8px"><p class="kicker">Test codes · visible to the team only</p>
+      <div class="codes">${tests.map(f => `<button class="chip" type="button" data-act="fill-code" data-code="${esc(f.code)}">${esc(f.code)}${f.note ? `<span class="mini">${esc(f.note)}</span>` : ''}</button>`).join('')}</div></div>` : '';
   return `<section class="intro">
     <h1>Bar Marino</h1>
     <p class="lede">Per giocare serve il codice della vostra famiglia. Lo trovate sul foglio che vi ha dato la scuola.</p>
@@ -963,66 +963,85 @@ ${step}
 ${result}
 </section>`;
 }
-// ===== RESEARCHER PANEL (#pannello, team only) =====
-const PANEL = { fams: [], schools: {}, games: {}, loading: false, busy: false, err: '', timer: null, arm: null, msg: '', csv: '', at: null };
+// ===== RESEARCHER PANEL (#panel, team only) =====
+// Names in the research dataset (CSV) for each decision, in the order of play, and the meaning of each option.
+// Option numbers follow the order on screen; in the risk menus 1 is the safest option and 5 the riskiest.
+const VAR = {
+  grinder: 'd01_grinder', g1: 'd02_gains_w1', roaster: 'd03_coffee_stock', l1: 'd04_losses_w1', m1: 'd05_mixed_w1',
+  pos: 'd06_pos', g2: 'd07_gains_w2', supplier: 'd08_supplier_debt', l2: 'd09_losses_w2', m2: 'd10_mixed_w2',
+  deposit: 'd11_deposit', g3: 'd12_gains_w3', blender: 'd13_blender', l3: 'd14_losses_w3', m3: 'd15_mixed_w3',
+  water: 'd16_water', g4: 'd17_gains_w4', oven: 'd18_oven', l4: 'd19_losses_w4', m4: 'd20_mixed_w4'
+};
+const OPT_LABELS = {
+  grinder: ['pay_cash', 'installments'], roaster: ['decline', 'pay_from_account', 'bridge_loan'], pos: ['basic', 'pro'],
+  supplier: ['repay_debt', 'keep_cash'], deposit: ['none', 'quarter', 'half', 'three_quarters', 'all'],
+  blender: ['pay_cash', 'zero_rate_installments'], water: ['single_bottles', 'crates', 'pallet'], oven: ['no_down_payment', 'down_payment'],
+  G: ['fixed_only', 'high_fixed_small_share', 'half_fixed_half_share', 'low_fixed_high_share', 'share_only'],
+  L: ['full_cover', 'deductible_30', 'deductible_60', 'deductible_90', 'no_insurance'],
+  M: ['no_extra_order', 'small_order', 'medium_order', 'large_order', 'very_large_order']
+};
+const dsNum = (id, k) => optsOf(id).indexOf(k) + 1;
+const dsLabel = (id, k) => (KIND[id] === 'lit' ? OPT_LABELS[id] : OPT_LABELS[KIND[id]])[optsOf(id).indexOf(k)];
+const PANEL = { fams: [], schools: {}, games: {}, loading: false, busy: false, err: '', timer: null, arm: null, msg: '', at: null, email: '' };
 const memo = new Map();
-const KTYPE = { lit: 'finanziaria', G: 'guadagni', L: 'perdite', M: 'misto' };
+const KTYPE = { lit: 'financial', G: 'gains', L: 'losses', M: 'mixed' };
+const outcomeOf = d => good(d) ? 'favorable' : 'unfavorable';
 function famView(f) {
   const g = PANEL.games[f.code], c = cleanSaved(g) || { choices: {}, i: 0, shown: [], log: [] };
-  const dice = genGame(Number(f.seed) > 0 ? Number(f.seed) : 1, !!f.speculari).dice;
+  const dice = genGame(Number(f.seed) > 0 ? Number(f.seed) : 1, !!f.mirrored).dice;
   const complete = c.i === 20 && c.shown.length === 12;
   let status;
-  if (!g) status = 'mai entrata';
-  else if (complete) status = 'completata';
-  else if (c.i === 0) status = 'entrata, non ha iniziato';
-  else if (c.i % 5 === 0 && weekRisk(c.i / 5).every(id => c.shown.includes(id))) status = `settimana ${c.i / 5} finita`;
-  else status = `settimana ${Math.min(4, Math.floor(c.i / 5) + 1)} in corso`;
+  if (!g) status = 'not entered';
+  else if (complete) status = 'completed';
+  else if (c.i === 0) status = 'entered, not started';
+  else if (c.i % 5 === 0 && weekRisk(c.i / 5).every(id => c.shown.includes(id))) status = `week ${c.i / 5} done`;
+  else status = `in week ${Math.min(4, Math.floor(c.i / 5) + 1)}`;
   let scores = null;
   if (complete) {
-    const key = f.seed + (f.speculari ? 'S' : '') + JSON.stringify(c.choices);
-    if (!memo.has(key)) memo.set(key, { fin: finalScore(c.choices, dice), lit: literacyFinal(c.choices), exp: expectedFinal(c.choices), dadi: riskTotal(c.choices, dice) });
+    const key = f.seed + (f.mirrored ? 'M' : '') + JSON.stringify(c.choices);
+    if (!memo.has(key)) memo.set(key, { fin: finalScore(c.choices, dice), lit: literacyFinal(c.choices), exp: expectedFinal(c.choices), dice: riskTotal(c.choices, dice) });
     scores = memo.get(key);
   }
-  const last = c.log.length ? c.log[c.log.length - 1].t : (g && g.aggiornata) || '';
+  const last = c.log.length ? c.log[c.log.length - 1].time : (g && g.updated_at) || '';
   return { f, g, c, dice, complete, status, scores, last };
 }
-const whenShort = t => t ? new Date(t).toLocaleString('it-IT', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
+const whenShort = t => t ? new Date(t).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
 // One row per decision made. Dice and scores are recomputed from the choices and the family's seed, never taken from the phone.
 function decisionRows() {
   const rows = [];
   for (const f of PANEL.fams) {
     const { c, dice } = famView(f), ev = {};
-    for (const e of c.log) if (e && e.ev === 'scelta' && typeof e.n === 'number') ev[e.n] = e;
+    for (const e of c.log) if (e && e.event === 'choice' && typeof e.n === 'number') ev[e.n] = e;
     for (let j = 0; j < c.i; j++) {
       const id = idxOf(j), k = c.choices[id], kind = KIND[id], w = WEEK_OF[id], e = ev[j + 1] || {}, risk = kind !== 'lit';
       const rolled = risk && c.shown.includes(id), sh = shockOf(w);
       rows.push({
-        codice: f.code, scuola: f.scuola || '', seed: f.seed, speculari: f.speculari ? 1 : 0,
-        n: j + 1, settimana: w, id, tipo: KTYPE[kind], scelta: k, opzione: optsOf(id).indexOf(k) + 1,
-        secondi: e.secondi ?? '', selezioni: e.selezioni ?? '', ora: e.t || '',
-        dado: rolled ? dice[id] : '', esito: rolled ? (good(dice[id]) ? 'favorevole' : 'sfavorevole') : '',
-        importo: rolled ? riskValue(id, k, dice[id]) : '',
-        shock_prima: kind === 'M' && c.shown.includes(sh) ? (good(dice[sh]) ? 'favorevole' : 'sfavorevole') : '',
-        esiti_sett_prec: risk && w > 1 ? ['g', 'l', 'm'].map(t => good(dice[t + (w - 1)]) ? 'F' : 'S').join('') : ''
+        family_code: f.code, school: f.school || '', seed: f.seed, mirrored_dice: f.mirrored ? 1 : 0,
+        n: j + 1, week: w, decision: VAR[id], type: KTYPE[kind], option: dsNum(id, k), option_label: dsLabel(id, k),
+        seconds: e.seconds ?? '', selections: e.selections ?? '', chosen_at: e.time || '',
+        die: rolled ? dice[id] : '', outcome: rolled ? outcomeOf(dice[id]) : '',
+        amount: rolled ? riskValue(id, k, dice[id]) : '',
+        shock_seen: kind === 'M' && c.shown.includes(sh) ? outcomeOf(dice[sh]) : '',
+        prev_week_outcomes: risk && w > 1 ? ['g', 'l', 'm'].map(t => good(dice[t + (w - 1)]) ? 'F' : 'U').join('') : ''
       });
     }
   }
   return rows;
 }
-// One row per family, with the 20 choices in columns (risk menus as 1–5, from the safest)
+// One row per family, with the 20 decisions in columns (option numbers; risk menus 1–5, from the safest)
 function familyRows() {
   return PANEL.fams.map(f => {
-    const v = famView(f), c = v.c, secs = c.log.filter(e => e && e.ev === 'scelta').reduce((a, e) => a + (Number(e.secondi) || 0), 0);
+    const v = famView(f), c = v.c, secs = c.log.filter(e => e && e.event === 'choice').reduce((a, e) => a + (Number(e.seconds) || 0), 0);
     const row = {
-      codice: f.code, scuola: f.scuola || '', seed: f.seed, speculari: f.speculari ? 1 : 0,
-      entrata: v.g ? 1 : 0, decisioni: c.i, dadi_tirati: c.shown.length, completata: v.complete ? 1 : 0,
-      accessi: c.log.filter(e => e && e.ev === 'accesso').length,
-      prima_attivita: c.log.length ? c.log[0].t : '', ultima_attivita: v.last, secondi_decisioni: Math.round(secs),
-      parte_finanziaria: LIT_IDS.every(id => c.choices[id] != null) ? literacyFinal(c.choices) : '',
-      totale_dadi: v.scores ? v.scores.dadi : '', patrimonio_finale: v.scores ? v.scores.fin : '',
-      patrimonio_atteso: v.scores ? Math.round(v.scores.exp * 100) / 100 : ''
+      family_code: f.code, school: f.school || '', seed: f.seed, mirrored_dice: f.mirrored ? 1 : 0,
+      entered: v.g ? 1 : 0, decisions: c.i, dice_rolled: c.shown.length, completed: v.complete ? 1 : 0,
+      logins: c.log.filter(e => e && e.event === 'login').length,
+      first_activity: c.log.length ? c.log[0].time : '', last_activity: v.last, seconds_on_decisions: Math.round(secs),
+      financial_part: LIT_IDS.every(id => c.choices[id] != null) ? literacyFinal(c.choices) : '',
+      dice_total: v.scores ? v.scores.dice : '', final_net_worth: v.scores ? v.scores.fin : '',
+      expected_net_worth: v.scores ? Math.round(v.scores.exp * 100) / 100 : ''
     };
-    for (const [id] of ORDER) row[id] = c.choices[id] == null ? '' : isRisk(id) ? RK.indexOf(c.choices[id]) + 1 : c.choices[id];
+    for (const [id] of ORDER) row[VAR[id]] = c.choices[id] == null ? '' : dsNum(id, c.choices[id]);
     return row;
   });
 }
@@ -1035,10 +1054,10 @@ function toCsv(rows) {
 async function loadPanel() {
   try {
     const [fams, schools, games] = await Promise.all([withTimeout(Store.allFamilies(), 20000), withTimeout(Store.allSchools(), 20000), withTimeout(Store.allGames(), 30000)]);
-    PANEL.fams = fams.sort((a, b) => (a.scuola || '').localeCompare(b.scuola || '') || a.code.localeCompare(b.code));
+    PANEL.fams = fams.sort((a, b) => (a.school || '').localeCompare(b.school || '') || a.code.localeCompare(b.code));
     PANEL.schools = schools; PANEL.games = games; PANEL.err = ''; PANEL.at = new Date();
-    if (!fams.length) PANEL.err = 'Nessuna famiglia visibile: controllate che la vostra email sia nella tabella ricercatori.';
-  } catch (e) { PANEL.err = 'Non riesco a leggere i dati dal server. Riprovate con «Aggiorna».'; }
+    if (!fams.length) PANEL.err = 'No families visible: check that your email is in the researchers table.';
+  } catch (e) { PANEL.err = 'Could not read the data from the server. Try again with “Refresh”.'; }
   PANEL.loading = false;
   if (route() === 'panel') render();
 }
@@ -1050,50 +1069,50 @@ async function openPanel() {
   clearInterval(PANEL.timer);
   PANEL.timer = setInterval(() => { if (route() === 'panel' && !document.hidden) loadPanel(); }, 60000);
 }
-function closePanel() { clearInterval(PANEL.timer); PANEL.arm = null; PANEL.csv = ''; PANEL.msg = ''; }
+function closePanel() { clearInterval(PANEL.timer); PANEL.arm = null; PANEL.msg = ''; }
 function renderPanelLogin() {
   return `<section class="lock">
-    <div class="stack" style="gap:8px"><p class="kicker">Solo per il team della ricerca</p><h2>Pannello ricercatori</h2></div>
+    <div class="stack" style="gap:8px"><p class="kicker">Research team only</p><h2>Researcher panel</h2></div>
     <form class="stack" id="adminForm" novalidate style="gap:12px;max-width:340px">
       <label class="muted" for="adminEmail" style="display:grid;gap:4px;font-weight:700;font-size:0.85rem">Email<input id="adminEmail" type="email" autocomplete="username" class="adminin" value="${esc(PANEL.email || '')}"></label>
       <label class="muted" for="adminPw" style="display:grid;gap:4px;font-weight:700;font-size:0.85rem">Password<input id="adminPw" type="password" autocomplete="current-password" class="adminin"></label>
-      <div class="actions"><button class="btn" type="submit" ${PANEL.busy ? 'disabled' : ''}>${PANEL.busy ? 'Un attimo…' : 'Entra'}</button><button class="btn ghost" type="button" data-act="to-game">Torna al gioco</button></div>
+      <div class="actions"><button class="btn" type="submit" ${PANEL.busy ? 'disabled' : ''}>${PANEL.busy ? 'One moment…' : 'Sign in'}</button><button class="btn ghost" type="button" data-act="to-game">Back to the game</button></div>
     </form>
     ${PANEL.err ? `<p class="err" role="alert">${PANEL.err}</p>` : ''}
   </section>`;
 }
 function renderPanel() {
-  if (!Store.ready) return '<p class="muted" role="status">Collegamento al server…</p>';
-  if (!Store.db) return `<section class="lock"><h2>Pannello ricercatori</h2><p class="text">Il gioco non è collegato a un server.</p><div class="actions"><button class="btn ghost" data-act="to-game">Torna al gioco</button></div></section>`;
+  if (!Store.ready) return '<p class="muted" role="status">Connecting to the server…</p>';
+  if (!Store.db) return `<section class="lock"><h2>Researcher panel</h2><p class="text">The game is not connected to a server.</p><div class="actions"><button class="btn ghost" data-act="to-game">Back to the game</button></div></section>`;
   if (!Store.isAdmin) return renderPanelLogin();
   const views = PANEL.fams.map(famView);
   const n = { tot: views.length, in: views.filter(v => v.g).length, run: views.filter(v => v.g && !v.complete && v.c.i > 0).length, done: views.filter(v => v.complete).length };
   const stat = (k, v) => `<div class="stat"><span class="k">${k}</span><span class="v">${v}</span></div>`;
   const rows = views.map(v => `<tr>
-      <td class="code">${esc(v.f.code)}${v.f.attiva === false ? '<span class="mini">disattivato</span>' : ''}</td><td>${esc(v.f.scuola || '—')}</td><td>${v.f.speculari ? 'speculari' : 'normali'} · ${esc(v.f.seed)}</td>
+      <td class="code">${esc(v.f.code)}${v.f.active === false ? '<span class="mini">inactive</span>' : ''}</td><td>${esc(v.f.school || '—')}</td><td>${v.f.mirrored ? 'mirrored' : 'normal'} · ${esc(v.f.seed)}</td>
       <td><span class="prog-bar" aria-hidden="true"><span style="width:${v.c.i * 5}%"></span></span>${v.c.i}/20</td>
       <td>${v.status}</td><td>${whenShort(v.last)}</td>
-      <td class="r">${v.scores ? `${fmt(v.scores.fin)}<span class="mini">atteso ${fmt(v.scores.exp)}</span>` : '—'}</td>
-      <td>${v.g ? (PANEL.arm === v.f.code ? `<button class="btn small danger" data-act="reset-ok" data-code="${esc(v.f.code)}">Conferma</button> <button class="btn small ghost" data-act="reset-no">No</button>` : `<button class="btn small ghost" data-act="reset" data-code="${esc(v.f.code)}">Azzera</button>`) : ''}</td>
+      <td class="r">${v.scores ? `${fmt(v.scores.fin)}<span class="mini">expected ${fmt(v.scores.exp)}</span>` : '—'}</td>
+      <td>${v.g ? (PANEL.arm === v.f.code ? `<button class="btn small danger" data-act="reset-ok" data-code="${esc(v.f.code)}">Confirm</button> <button class="btn small ghost" data-act="reset-no">No</button>` : `<button class="btn small ghost" data-act="reset" data-code="${esc(v.f.code)}">Reset</button>`) : ''}</td>
     </tr>`).join('');
-  const cal = Object.entries(PANEL.schools).map(([id, s]) => `<div><b>${esc(id)}</b> · ${(s.apertura || []).map((d, i) => `sett. ${i + 1}: ${new Date(d + 'T12:00:00').toLocaleDateString('it-IT', { day: 'numeric', month: 'short' })}`).join(' · ')}</div>`).join('');
+  const cal = Object.entries(PANEL.schools).map(([id, s]) => `<div><b>${esc(id)}</b> · ${(s.opening_dates || []).map((d, i) => `week ${i + 1}: ${new Date(d + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`).join(' · ')}</div>`).join('');
   return `<section class="rpanel">
-    <div class="stack" style="gap:8px"><p class="kicker">Solo per il team</p><h2>Pannello ricercatori</h2></div>
-    <p class="note">Il database del gioco non contiene il braccio di trattamento: i CSV si uniscono al file delle assegnazioni con il codice famiglia. Patrimonio e dadi sono ricalcolati dalle scelte e dal codice dei dadi della famiglia, non presi dal telefono. Gli orari nei CSV sono in UTC (in inverno un’ora indietro rispetto all’Italia).</p>
-    <div class="metrics">${stat('Famiglie', n.tot)}${stat('Entrate', n.in)}${stat('In corso', n.run)}${stat('Completate', n.done)}</div>
+    <div class="stack" style="gap:8px"><p class="kicker">Research team only</p><h2>Researcher panel</h2></div>
+    <p class="note">The game database holds no treatment arm: merge the CSVs with the assignment file on the family code. Net worth and dice are recomputed from the choices and the family’s dice code, not taken from the phone. Times in the CSVs are UTC (one hour behind Italy in winter).</p>
+    <div class="metrics">${stat('Families', n.tot)}${stat('Entered', n.in)}${stat('In progress', n.run)}${stat('Completed', n.done)}</div>
     ${PANEL.err ? `<p class="err" role="alert">${PANEL.err}</p>` : ''}
-    ${PANEL.loading && !PANEL.fams.length ? '<p class="muted" role="status">Carico i dati…</p>' : `<div class="tablewrap"><table>
-      <thead><tr><th>Codice</th><th>Scuola</th><th>Dadi · seed</th><th>Decisioni</th><th>Stato</th><th>Ultima attività</th><th class="r">Patrimonio</th><th></th></tr></thead>
+    ${PANEL.loading && !PANEL.fams.length ? '<p class="muted" role="status">Loading…</p>' : `<div class="tablewrap"><table>
+      <thead><tr><th>Code</th><th>School</th><th>Dice · seed</th><th>Decisions</th><th>Status</th><th>Last activity</th><th class="r">Net worth</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table></div>`}
-    <div class="actions"><button class="btn small ghost" data-act="refresh">Aggiorna</button><span class="muted">${PANEL.at ? 'Aggiornato alle ' + PANEL.at.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }) + ' · si aggiorna da solo ogni minuto' : ''}</span></div>
-    <p class="note">«Azzera» cancella la partita sul server e anche le copie salvate sui telefoni, così il codice si può rigiocare da capo.</p>
+    <div class="actions"><button class="btn small ghost" data-act="refresh">Refresh</button><span class="muted">${PANEL.at ? 'Updated at ' + PANEL.at.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) + ' · refreshes every minute' : ''}</span></div>
+    <p class="note">“Reset” deletes the game on the server and the copies saved on phones, so the code can be played again from the start.</p>
     <div class="actions">
-      <button class="btn" data-act="csv" data-kind="decisioni">Scarica CSV · una riga per decisione</button>
-      <button class="btn ghost" data-act="csv" data-kind="famiglie">Scarica CSV · una riga per famiglia</button>
+      <button class="btn" data-act="csv" data-kind="decisions">Download CSV · one row per decision</button>
+      <button class="btn ghost" data-act="csv" data-kind="families">Download CSV · one row per family</button>
       <span class="muted" role="status">${PANEL.msg}</span>
     </div>
-    <div class="stack" style="gap:8px"><h3>Calendario delle scuole</h3><div class="cal note">${cal || '—'}</div></div>
-    <div class="actions"><button class="btn ghost" data-act="to-game">Torna al gioco</button><button class="btn ghost" data-act="admin-out">Esci dal pannello</button><span class="muted">${esc(Store.email)}</span></div>
+    <div class="stack" style="gap:8px"><h3>School calendars</h3><div class="cal note">${cal || '—'}</div></div>
+    <div class="actions"><button class="btn ghost" data-act="to-game">Back to the game</button><button class="btn ghost" data-act="admin-out">Sign out</button><span class="muted">${esc(Store.email)}</span></div>
   </section>`;
 }
 function saveFile(name, text) {
@@ -1102,14 +1121,14 @@ function saveFile(name, text) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 function downloadCsv(kind) {
-  const csv = toCsv(kind === 'decisioni' ? decisionRows() : familyRows());
-  if (!csv) { PANEL.msg = 'Ancora nessun dato.'; render(); return; }
+  const csv = toCsv(kind === 'decisions' ? decisionRows() : familyRows());
+  if (!csv) { PANEL.msg = 'No data yet.'; render(); return; }
   saveFile(`bar-marino-${kind}-${new Date().toISOString().slice(0, 10)}.csv`, csv);
   PANEL.msg = ''; render();
 }
 async function adminLogin(email, pw) {
   PANEL.email = email;
-  if (!email || !pw) { PANEL.err = 'Scrivete email e password.'; render(); return; }
+  if (!email || !pw) { PANEL.err = 'Enter email and password.'; render(); return; }
   PANEL.busy = true; PANEL.err = ''; render();
   try {
     await withTimeout(Store.signIn(email.trim(), pw), 15000);
@@ -1117,12 +1136,12 @@ async function adminLogin(email, pw) {
     try { TEST = await withTimeout(Store.allFamilies(), 12000); } catch (_) { TEST = []; }
     openPanel();
   } catch (e) {
-    PANEL.busy = false; PANEL.err = e && e.code === 'timeout' ? 'Il server non risponde.' : 'Email o password non corrette.'; render();
+    PANEL.busy = false; PANEL.err = e && e.code === 'timeout' ? 'The server is not answering.' : 'Wrong email or password.'; render();
   }
 }
 
 // ===== RENDER & ACTIONS =====
-const route = () => location.hash === '#pannello' ? 'panel' : 'game';
+const route = () => (location.hash === '#panel' || location.hash === '#pannello') ? 'panel' : 'game';
 function render() {
   const app = document.getElementById('app');
   if (route() === 'panel') { app.innerHTML = renderPanel(); renderFoot(); return; }
@@ -1140,7 +1159,7 @@ function renderFoot() {
   if (G.code && msg) parts.push(`<span class="sync ${Sync.state === 'ok' ? 'ok' : Sync.state === 'retry' || Sync.state === 'denied' ? 'warn' : ''}" role="status">${msg}</span>${Sync.state === 'retry' ? '<button class="linkbtn" data-act="retry-sync">Riprova ora</button>' : ''}`);
   if (!G.code && G.screen !== 'login') parts.push('<span class="sync warn">Senza server: la partita non viene salvata.</span>');
   if (!['login', 'closed', 'locked'].includes(G.screen)) parts.push('<button class="linkbtn" data-act="logout">Esci</button>');
-  if (Store.isAdmin) parts.push('<a href="#pannello">Pannello ricercatori</a>');
+  if (Store.isAdmin) parts.push('<a href="#panel">Researcher panel</a>');
   el.innerHTML = parts.join('');
 }
 const top0 = () => window.scrollTo({ top: 0 });
@@ -1188,24 +1207,24 @@ document.addEventListener('click', e => {
   } else if (act === 'offline') {
     newGame(1, false, null); G.screen = 'intro'; render(); top0();
   } else if (act === 'start') {
-    G.started = G.started || nowISO(); logEv('inizio_settimana', { settimana: 1 });
+    G.started = G.started || nowISO(); logEv('week_start', { week: 1 });
     G.screen = 'play'; sync(); render(); top0();
   } else if (act === 'confirm' && G.sel) {
     const id = idxOf(G.i), secs = G.t0 ? Math.round((Date.now() - G.t0) / 100) / 10 : null;
     G.choices[id] = G.sel;
-    logEv('scelta', { n: G.i + 1, id, settimana: WEEK_OF[id], tipo: KTYPE[KIND[id]], scelta: G.sel, secondi: secs, selezioni: G.nSel || 1 });
+    logEv('choice', { n: G.i + 1, decision: VAR[id], week: WEEK_OF[id], type: KTYPE[KIND[id]], option: dsNum(id, G.sel), option_label: dsLabel(id, G.sel), seconds: secs, selections: G.nSel || 1 });
     G.i += 1; G.sel = null;
     G.screen = G.i === 20 ? 'end' : G.i % 5 === 4 ? 'shock' : G.i % 5 === 0 ? 'weekend' : 'play';
     sync(); render(); top0();
   } else if (act === 'close-session') {
-    logEv('fine_sessione', { settimana: G.i / 5 });
+    logEv('session_end', { week: G.i / 5 });
     G.screen = 'closed'; sync(); render(); top0();
   } else if (act === 'go-recap') {
     G.screen = isOpen(G.i / 5 + 1) ? 'recap' : 'locked'; render(); top0();
   } else if (act === 'begin-week') {
     const w = G.i / 5 + 1;
     if (!isOpen(w)) { G.screen = 'locked'; render(); top0(); return; }
-    logEv('inizio_settimana', { settimana: w });
+    logEv('week_start', { week: w });
     G.screen = 'play'; sync(); render(); top0();
   } else if (act === 'roll-shock') {
     b.disabled = true;
@@ -1219,7 +1238,7 @@ document.addEventListener('click', e => {
     b.disabled = true;
     rollAnim(() => {
       addShown([...RISK_IDS]); cache = null;
-      logEv('fine_partita', { patrimonio: finalScore(G.choices, G.dice) });
+      logEv('game_end', { net_worth: finalScore(G.choices, G.dice) });
       sync(); render();
     });
   } else if (act === 'logout') {
@@ -1234,8 +1253,8 @@ document.addEventListener('click', e => {
     PANEL.arm = null; render();
   } else if (act === 'reset-ok') {
     const code = b.dataset.code; b.disabled = true;
-    Store.resetGame(code).then(() => { PANEL.arm = null; PANEL.msg = `Partita ${code} azzerata.`; return loadPanel(); })
-      .catch(() => { PANEL.arm = null; PANEL.msg = 'Non sono riuscito ad azzerare la partita.'; render(); });
+    Store.resetGame(code).then(() => { PANEL.arm = null; PANEL.msg = `Game ${code} reset.`; return loadPanel(); })
+      .catch(() => { PANEL.arm = null; PANEL.msg = 'Could not reset the game.'; render(); });
   } else if (act === 'refresh') {
     b.disabled = true; loadPanel();
   } else if (act === 'admin-out') {
@@ -1251,7 +1270,7 @@ window.addEventListener('hashchange', () => { if (route() === 'panel') openPanel
 async function boot() {
   const h = location.hash.slice(1), f = new URLSearchParams(location.search).get('f') || '';
   if (/^[A-Za-z0-9]{4,10}$/.test(f)) G.prefill = normCode(f);                                   // personal link: …/?f=K7P3A
-  else if (/^[A-Za-z0-9]{4,10}$/.test(h) && h !== 'pannello') G.prefill = normCode(h);       // or …/#K7P3A
+  else if (/^[A-Za-z0-9]{4,10}$/.test(h) && !['panel', 'pannello'].includes(h)) G.prefill = normCode(h);       // or …/#K7P3A
   else G.prefill = lastCode();
   render();
   await Store.init();
