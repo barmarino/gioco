@@ -557,7 +557,7 @@ const CONFIG = {
 };
 // Everything that talks to the server is in Store. The tables and the two functions enter_game/save_game are created by setup.sql.
 // Families never read tables: they call enter_game(code) and save_game(code, game). Researchers sign in and read through the database rules.
-const VERSION = '4c-family-supabase-1.2';
+const VERSION = '4c-family-supabase-1.3';
 const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej({ code: 'timeout', message: 'timeout' }), ms))]);
 const configured = () => /^https:\/\/.+/.test(CONFIG.SUPABASE_URL) && !/INCOLLA/.test(CONFIG.SUPABASE_URL + CONFIG.SUPABASE_KEY);
 const must = ({ data, error }) => { if (error) throw error; return data; };
@@ -576,6 +576,7 @@ const Store = {
   async saveGame(code, doc) { return must(await this.db.rpc('save_game', { p_code: code, p_game: doc })); },
   // researchers (what they can read is decided by the database rules, not by this page)
   async signIn(email, password) { const data = must(await this.db.auth.signInWithPassword({ email, password })); this.setSession(data.session); },
+  async changePassword(password) { must(await this.db.auth.updateUser({ password })); },
   async signOut() { try { await this.db.auth.signOut(); } catch (_) {} this.setSession(null); },
   async fetchAll(table, cols, key) { // the API returns at most 1000 rows per request
     const out = [];
@@ -986,7 +987,7 @@ const OPT_LABELS = {
 };
 const dsNum = (id, k) => optsOf(id).indexOf(k) + 1;
 const dsLabel = (id, k) => (KIND[id] === 'lit' ? OPT_LABELS[id] : OPT_LABELS[KIND[id]])[optsOf(id).indexOf(k)];
-const PANEL = { fams: [], schools: {}, games: {}, loading: false, busy: false, err: '', timer: null, arm: null, msg: '', at: null, email: '' };
+const PANEL = { fams: [], schools: {}, games: {}, loading: false, busy: false, err: '', timer: null, arm: null, msg: '', at: null, email: '', pw: false, pwMsg: '', pwErr: '', pwBusy: false };
 const memo = new Map();
 const KTYPE = { lit: 'financial', G: 'gains', L: 'losses', M: 'mixed' };
 const outcomeOf = d => good(d) ? 'favorable' : 'unfavorable';
@@ -1071,7 +1072,7 @@ async function openPanel() {
   await loadPanel();
   // refresh every minute while the panel is open (reads only)
   clearInterval(PANEL.timer);
-  PANEL.timer = setInterval(() => { if (route() === 'panel' && !document.hidden) loadPanel(); }, 60000);
+  PANEL.timer = setInterval(() => { if (route() === 'panel' && !document.hidden && !PANEL.pw) loadPanel(); }, 60000);
 }
 function closePanel() { clearInterval(PANEL.timer); PANEL.arm = null; PANEL.msg = ''; }
 function renderPanelLogin() {
@@ -1116,7 +1117,15 @@ function renderPanel() {
       <span class="muted" role="status">${PANEL.msg}</span>
     </div>
     <div class="stack" style="gap:8px"><h3>School calendars</h3><div class="cal note">${cal || '—'}</div></div>
-    <div class="actions"><button class="btn ghost" data-act="to-game">Back to the game</button><button class="btn ghost" data-act="admin-out">Sign out</button><span class="muted">${esc(Store.email)}</span></div>
+    ${PANEL.pw ? `<form class="stack" id="pwForm" novalidate style="gap:12px;max-width:340px">
+      <h3>Change password</h3>
+      <label class="muted" for="newPw" style="display:grid;gap:4px;font-weight:700;font-size:0.85rem">New password (at least 10 characters)<input id="newPw" type="password" autocomplete="new-password" class="adminin"></label>
+      <label class="muted" for="newPw2" style="display:grid;gap:4px;font-weight:700;font-size:0.85rem">Repeat it<input id="newPw2" type="password" autocomplete="new-password" class="adminin"></label>
+      <div class="actions"><button class="btn" type="submit" ${PANEL.pwBusy ? 'disabled' : ''}>${PANEL.pwBusy ? 'One moment…' : 'Save new password'}</button><button class="btn ghost" type="button" data-act="pw-close">Cancel</button></div>
+      ${PANEL.pwErr ? `<p class="err" role="alert">${PANEL.pwErr}</p>` : ''}
+    </form>` : ''}
+    <div class="actions"><button class="btn ghost" data-act="to-game">Back to the game</button>${PANEL.pw ? '' : '<button class="btn ghost" data-act="pw-open">Change password</button>'}<button class="btn ghost" data-act="admin-out">Sign out</button><span class="muted">${esc(Store.email)}</span></div>
+    ${PANEL.pwMsg ? `<p class="muted" role="status">${PANEL.pwMsg}</p>` : ''}
   </section>`;
 }
 function saveFile(name, text) {
@@ -1129,6 +1138,23 @@ function downloadCsv(kind) {
   if (!csv) { PANEL.msg = 'No data yet.'; render(); return; }
   saveFile(`bar-marino-${kind}-${new Date().toISOString().slice(0, 10)}.csv`, csv);
   PANEL.msg = ''; render();
+}
+async function changePassword(pw, pw2) {
+  if (pw.length < 10) { PANEL.pwErr = 'The password must be at least 10 characters long.'; render(); return; }
+  if (pw !== pw2) { PANEL.pwErr = 'The two passwords are different.'; render(); return; }
+  PANEL.pwBusy = true; PANEL.pwErr = ''; render();
+  try {
+    await withTimeout(Store.changePassword(pw), 15000);
+    PANEL.pw = false; PANEL.pwBusy = false; PANEL.pwMsg = 'Password changed. Use the new one next time you sign in.'; render();
+  } catch (e) {
+    PANEL.pwBusy = false;
+    PANEL.pwErr = e && e.code === 'timeout' ? 'The server is not answering.'
+      : e && e.code === 'same_password' ? 'The new password must be different from the old one.'
+      : e && e.code === 'weak_password' ? 'The server refused this password as too weak: try a longer one.'
+      : e && e.code === 'reauthentication_needed' ? 'For safety, sign out and sign in again, then change the password straight away.'
+      : 'Could not change the password. Try again.';
+    render();
+  }
 }
 async function adminLogin(email, pw) {
   PANEL.email = email;
@@ -1195,6 +1221,7 @@ document.addEventListener('change', e => {
 });
 document.addEventListener('submit', e => {
   if (e.target.id === 'loginForm') { e.preventDefault(); if (!G.busy) login(document.getElementById('codeInput').value); }
+  if (e.target.id === 'pwForm') { e.preventDefault(); if (!PANEL.pwBusy) changePassword(document.getElementById('newPw').value, document.getElementById('newPw2').value); }
   if (e.target.id === 'adminForm') { e.preventDefault(); if (!PANEL.busy) adminLogin(document.getElementById('adminEmail').value, document.getElementById('adminPw').value); }
 });
 function addShown(ids) {
@@ -1261,7 +1288,12 @@ document.addEventListener('click', e => {
       .catch(() => { PANEL.arm = null; PANEL.msg = 'Could not reset the game.'; render(); });
   } else if (act === 'refresh') {
     b.disabled = true; loadPanel();
+  } else if (act === 'pw-open') {
+    PANEL.pw = true; PANEL.pwErr = ''; PANEL.pwMsg = ''; render(); const i = document.getElementById('newPw'); if (i) i.focus();
+  } else if (act === 'pw-close') {
+    PANEL.pw = false; PANEL.pwErr = ''; render();
   } else if (act === 'admin-out') {
+    PANEL.pw = false; PANEL.pwMsg = ''; PANEL.pwErr = '';
     closePanel(); Store.signOut().then(() => { TEST = []; PANEL.fams = []; PANEL.games = {}; render(); });
   } else if (act === 'csv') {
     downloadCsv(b.dataset.kind);

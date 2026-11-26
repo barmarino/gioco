@@ -12,6 +12,14 @@ Family game of the school financial-education project (version 4c). The game its
 - The database holds no names and no treatment arm, only codes. The code ↔ name key stays with the team.
 - `index.html` contains Supabase's *publishable* key, which is meant to be public. The secret key and the database password never go here.
 
+## Adding a researcher
+
+1. Supabase > Authentication > Users > **Add user > Create new user**: their email, a temporary password, *Auto Confirm User* ticked. (Not "Send invitation": on the free plan Supabase only emails members of the Supabase team, and the panel has no page for invitation links.)
+2. Supabase > SQL Editor: `insert into public.researchers (email) values ('their.email@unibocconi.it');`
+3. Send them the panel link and the temporary password through a separate channel. Once signed in, they choose their own password with **Change password** at the bottom of the panel.
+
+To remove someone: delete their row from `researchers` (they lose access to the data immediately) and delete the user in Authentication.
+
 ## Data
 
 The panel exports two CSV files, computed from the stored games (scores and dice are recomputed from the choices and each family's dice code):
