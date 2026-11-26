@@ -557,7 +557,7 @@ const CONFIG = {
 };
 // Everything that talks to the server is in Store. The tables and the two functions enter_game/save_game are created by setup.sql.
 // Families never read tables: they call enter_game(code) and save_game(code, game). Researchers sign in and read through the database rules.
-const VERSION = '4c-family-supabase-1.1';
+const VERSION = '4c-family-supabase-1.2';
 const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej({ code: 'timeout', message: 'timeout' }), ms))]);
 const configured = () => /^https:\/\/.+/.test(CONFIG.SUPABASE_URL) && !/INCOLLA/.test(CONFIG.SUPABASE_URL + CONFIG.SUPABASE_KEY);
 const must = ({ data, error }) => { if (error) throw error; return data; };
