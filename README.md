@@ -20,6 +20,10 @@ Family game of the school financial-education project (version 4c). The game its
 
 To remove someone: delete their row from `researchers` (they lose access to the data immediately) and delete the user in Authentication.
 
+## Clearing a game
+
+Use **Reset** in the panel. It deletes the game and marks the code as reset, so copies still saved on phones are ignored. Deleting the row in `games` by hand is not enough: a phone that played that code would upload its copy again at the next login.
+
 ## Data
 
 The panel exports two CSV files, computed from the stored games (scores and dice are recomputed from the choices and each family's dice code):
